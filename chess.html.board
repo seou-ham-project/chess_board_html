@@ -1,0 +1,452 @@
+<center style="font-style:italic; color:#888; margin: 3em;">
+  <link rel="stylesheet"
+    href="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css" />
+  <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+  <script src="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+
+  <style>
+    body.light-mode {
+    background: #fff;
+    color: #222;
+    }
+
+    body.dark-mode {
+    background: #121212;
+    color: #ddd;
+    }
+
+    body.dark-mode #board {
+    box-shadow: 0 0 15px #666;
+    background-color: #333;
+    }
+
+    body.dark-mode button,
+    body.dark-mode select,
+    body.dark-mode label,
+    body.dark-mode input {
+    background-color: #444;
+    color: #ddd;
+    border: 1px solid #666;
+    }
+
+    body.dark-mode .highlight-square {
+    background-color: rgba(255, 255, 0, 0.8) !important;
+    }
+
+    body.dark-mode .legal-move-square {
+    background-color: rgba(100, 255, 100, 0.8) !important;
+    }
+
+    body.dark-mode .last-move-square {
+    background-color: rgba(0, 0, 255, 0.6) !important;
+    }
+
+    body.dark-mode .check-square {
+    background-color: rgba(255, 0, 0, 0.7) !important;
+    }
+
+    #board {
+    margin: 20px auto;
+    width: 400px;
+    }
+
+    button,
+    select,
+    label,
+    input {
+    margin: 5px;
+    padding: 8px 12px;
+    font-size: 1em;
+    cursor: pointer;
+    }
+
+    .highlight-square {
+    background-color: rgba(255, 255, 0, 0.6) !important;
+    }
+
+    .legal-move-square {
+    background-color: rgba(100, 255, 100, 0.6) !important;
+    }
+
+    .last-move-square {
+    background-color: rgba(0, 0, 255, 0.4) !important;
+    }
+
+    .check-square {
+    background-color: rgba(255, 0, 0, 0.6) !important;
+    }
+
+    .timer {
+    font-size: 1.2em;
+    margin-top: 10px;
+    }
+
+    #promotionModal {
+    display: none;
+    position: fixed;
+    top: 40%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: #A81C1C;
+    border: 1px solid #aaa;
+    padding: 20px;
+    z-index: 1000;
+    }
+
+    #promotionModal button {
+    margin: 5px;
+    font-size: 1.1em;
+    padding: 6px 14px;
+    }
+  </style>
+
+  <script>
+    $(function () {
+    var board = null;
+    var game = new window.Chess();
+    var $status = $('#status');
+    var $fen = $('#fen');
+    var $pgn = $('#pgn');
+
+    var whiteTime = 300;
+    var blackTime = 300;
+    var baseTime = 300;
+    var increment = 0; // seconds per move increment
+    var timerInterval = null;
+    var activeColor = 'w';
+
+    var lastMoveSquares = [];
+    var promotionMove = null;
+
+    // Format seconds to mm:ss or --:-- if no time limit
+    function formatTime(sec) {
+    if (sec === 0) return "--:--";
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}:${s < 10 ? '0' : ''}${s}`;
+    }
+
+    function updateTimers() {
+    $('#white-timer').text(formatTime(whiteTime));
+    $('#black-timer').text(formatTime(blackTime));
+    }
+
+    function switchTimer() {
+    clearInterval(timerInterval);
+    if (game.game_over()) return;
+
+    // If no time limit (baseTime = 0), don't countdown
+    if (baseTime === 0) {
+    whiteTime = 0;
+    blackTime = 0;
+    updateTimers();
+    return;
+    }
+
+    timerInterval = setInterval(() => {
+    if (activeColor === 'w') {
+    whiteTime--;
+    if (whiteTime <= 0) {
+    clearInterval(timerInterval);
+    alert("White ran out of time. Black wins!");
+    resetGame();
+    return;
+    }
+    } else {
+    blackTime--;
+    if (blackTime <= 0) {
+    clearInterval(timerInterval);
+    alert("Black ran out of time. White wins!");
+    resetGame();
+    return;
+    }
+    }
+    updateTimers();
+    }, 1000);
+    }
+
+    function removeHighlights() {
+    $('#board .square-55d63').removeClass('highlight-square legal-move-square last-move-square check-square');
+    }
+
+    function highlightLastMove(from, to) {
+    removeHighlights();
+    lastMoveSquares = [from, to];
+    lastMoveSquares.forEach(sq => {
+    $('#board .square-' + sq).addClass('last-move-square');
+    });
+    }
+
+    function highlightCheck() {
+    removeHighlights();
+    if (!game.in_check()) return;
+    const kingSquare = game.turn() === 'w' ? findKing('w') : findKing('b');
+    if (kingSquare) {
+    $('#board .square-' + kingSquare).addClass('check-square');
+    }
+    }
+
+    function findKing(color) {
+    const boardData = game.board();
+    for (let rank = 0; rank < 8; rank++) {
+    for (let file = 0; file < 8; file++) {
+    let piece = boardData[rank][file];
+    if (piece && piece.type === 'k' && piece.color === color) {
+    const fileChar = 'abcdefgh'[file];
+    const rankChar = 8 - rank;
+    return fileChar + rankChar;
+    }
+    }
+    }
+    return null;
+    }
+
+    function onDragStart(source, piece) {
+    if (game.game_over()) return false;
+    if ((game.turn() === 'w' && piece.search(/^b/) !== -1) ||
+    (game.turn() === 'b' && piece.search(/^w/) !== -1)) {
+    return false;
+    }
+    }
+
+    function onDrop(source, target) {
+    // Check for promotion moves and show modal
+    var moves = game.moves({ verbose: true, square: source });
+    var promotionMoves = moves.filter(m => m.promotion && m.to === target);
+    if (promotionMoves.length > 0) {
+    promotionMove = { from: source, to: target };
+    showPromotionPrompt();
+    return 'snapback';
+    }
+
+    var move = game.move({ from: source, to: target, promotion: 'q' });
+    if (move === null) return 'snapback';
+
+    onMoveComplete(move);
+    }
+
+    function onMoveComplete(move) {
+    highlightLastMove(move.from, move.to);
+    activeColor = game.turn();
+
+    // Add increment to clock of player who just moved
+    if (move.color === 'w') whiteTime += increment;
+    else blackTime += increment;
+
+    switchTimer();
+    updateStatus();
+    }
+
+    function onSnapEnd() {
+    board.position(game.fen(), false);
+    highlightCheck();
+    }
+
+    function updateStatus() {
+    var status = '';
+    var moveColor = game.turn() === 'b' ? 'Black' : 'White';
+
+    if (game.in_checkmate()) {
+    status = 'Checkmate! ' + (moveColor === 'White' ? 'Black' : 'White') + ' wins!';
+    clearInterval(timerInterval);
+    setTimeout(() => {
+    alert(status);
+    resetGame();
+    }, 200);
+    } else if (game.in_draw()) {
+    status = 'Game over, drawn position';
+    clearInterval(timerInterval);
+    setTimeout(() => {
+    alert(status);
+    resetGame();
+    }, 200);
+    } else {
+    status = moveColor + ' to move';
+    if (game.in_check()) {
+    status += ', ' + moveColor + ' is in check';
+    }
+    }
+
+    $status.html(status);
+    $fen.html(game.fen());
+    $pgn.html(game.pgn());
+    }
+
+    function resetGame(fen) {
+    clearInterval(timerInterval);
+    if (fen) {
+    game.load(fen);
+    board.position(fen);
+    } else {
+    game.reset();
+    board.start();
+    }
+    removeHighlights();
+    resetTimers();
+    updateStatus();
+    }
+
+    function resetTimers() {
+    baseTime = parseInt($('#timeSelect').val());
+    increment = parseInt($('#incrementSelect').val());
+    whiteTime = baseTime;
+    blackTime = baseTime;
+    updateTimers();
+    activeColor = 'w';
+    switchTimer();
+    }
+
+    function showPromotionPrompt() {
+    $('#promotionModal').show();
+    }
+
+    function hidePromotionPrompt() {
+    $('#promotionModal').hide();
+    }
+
+    $('.promotion-piece').on('click', function () {
+    var promo = $(this).data('promo');
+    var move = game.move({ from: promotionMove.from, to: promotionMove.to, promotion: promo });
+    if (move === null) {
+    alert("Invalid promotion move");
+    hidePromotionPrompt();
+    return;
+    }
+    hidePromotionPrompt();
+    promotionMove = null;
+    board.position(game.fen());
+    onMoveComplete(move);
+    });
+
+    function onMouseoverSquare(square) {
+    if (game.game_over()) return;
+    var moves = game.moves({ square: square, verbose: true });
+    if (moves.length === 0) return;
+
+    removeHighlights();
+    $('#board .square-' + square).addClass('legal-move-square');
+    moves.forEach(m => {
+    $('#board .square-' + m.to).addClass('legal-move-square');
+    });
+    }
+
+    function onMouseoutSquare(square) {
+    removeHighlights();
+    lastMoveSquares.forEach(sq => {
+    $('#board .square-' + sq).addClass('last-move-square');
+    });
+    highlightCheck();
+    }
+
+    // DARK MODE TOGGLE
+    function applyTheme(theme) {
+    if (theme === 'dark') {
+    $('body').removeClass('light-mode').addClass('dark-mode');
+    } else {
+    $('body').removeClass('dark-mode').addClass('light-mode');
+    }
+    }
+
+    let currentTheme = localStorage.getItem('chessTheme') || 'light';
+    applyTheme(currentTheme);
+
+    $('#toggleThemeBtn').on('click', function () {
+    currentTheme = currentTheme === 'light' ? 'dark' : 'light';
+    applyTheme(currentTheme);
+    localStorage.setItem('chessTheme', currentTheme);
+    });
+
+    board = window.Chessboard('board', {
+    draggable: true,
+    pieceTheme: 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png',
+    moveSpeed: 'slow',
+    onDragStart: onDragStart,
+    onDrop: onDrop,
+    onSnapEnd: onSnapEnd,
+    onMouseoverSquare: onMouseoverSquare,
+    onMouseoutSquare: onMouseoutSquare
+    });
+
+    updateStatus();
+    updateTimers();
+    switchTimer();
+
+    $('#startBtn').on('click', function () {
+    resetGame();
+    });
+
+    $('#clearBtn').on('click', function () {
+    clearInterval(timerInterval);
+    game.clear();
+    board.clear();
+    removeHighlights();
+    whiteTime = baseTime;
+    blackTime = baseTime;
+    updateTimers();
+    $status.html('');
+    $fen.html('');
+    $pgn.html('');
+    });
+
+    $('#loadFenBtn').on('click', function () {
+    var fen = $('#fenInput').val();
+    if (game.load(fen)) {
+    resetGame(fen);
+    } else {
+    alert("Invalid FEN");
+    }
+    });
+
+    $('#timeSelect, #incrementSelect').on('change', function () {
+    resetTimers();
+    });
+    });
+  </script>
+
+  <!-- Promotion modal -->
+  <div id="promotionModal">
+    <div style="margin-bottom:10px;">Choose promotion piece:</div>
+    <button class="promotion-piece" data-promo="q">Queen</button>
+    <button class="promotion-piece" data-promo="r">Rook</button>
+    <button class="promotion-piece" data-promo="b">Bishop</button>
+    <button class="promotion-piece" data-promo="n">Knight</button>
+  </div>
+
+  <!-- Custom FEN input -->
+  <label for="fenInput">Load custom FEN:</label>
+  <input type="text" id="fenInput" size="60" placeholder="Enter FEN string here" />
+  <button id="loadFenBtn">Load FEN</button>
+
+  <!-- Time controls -->
+  <label for="timeSelect">Game time (seconds):</label>
+  <select id="timeSelect">
+    <option value="0">No Time Limit</option>
+    <option value="60">1 minute</option>
+    <option value="180">3 minutes</option>
+    <option value="300" selected>5 minutes</option>
+    <option value="600">10 minutes</option>
+  </select>
+
+  <label for="incrementSelect">Increment per move (seconds):</label>
+  <select id="incrementSelect">
+    <option value="0" selected>0 sec</option>
+    <option value="1">1 sec</option>
+    <option value="2">2 sec</option>
+    <option value="5">5 sec</option>
+  </select>
+
+  <br />
+
+  <div id="board" style="width: 400px;"></div>
+  <div class="timer">White: <span id="white-timer">5:00</span></div>
+  <div class="timer">Black: <span id="black-timer">5:00</span></div>
+
+  <button id="startBtn">Start Position</button>
+  <button id="clearBtn">Clear Board</button>
+  <button id="toggleThemeBtn">Toggle Dark Mode</button>
+
+  <div id="status" style="margin-top: 10px; font-style: italic;"></div>
+  <div>FEN: <span id="fen"></span></div>
+  <div>PGN: <span id="pgn"></span></div>
+</center>
